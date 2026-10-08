@@ -1,0 +1,30 @@
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local database
+*.db
+*.sqlite
+*.sqlite3
+
+# Model weights and training outputs
+backend/outputs/
+*.safetensors
+*.bin
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Logs and temporary files
+*.log
+.DS_Store
