@@ -15,15 +15,14 @@ from transformers import (
     TrainerCallback,
 )
 
-from app.api.models import models
 from app.services.artifact_service import create_artifact
+from app.database import SessionLocal
+from app.database_models import ModelRecord, TrainingJobRecord
 
 
 # -------------------------------------------------------------------
 # In-memory training job registry
 # -------------------------------------------------------------------
-
-training_jobs = {}
 
 
 # -------------------------------------------------------------------
@@ -106,51 +105,86 @@ class ForgeMLTrainingCallback(TrainerCallback):
         )
 
 
-# -------------------------------------------------------------------
-# Create training job
-# -------------------------------------------------------------------
-
-def create_training_job(job_data: dict):
-
-    job_id = str(uuid4())
-
-    job = {
-        "id": job_id,
-        "model_id": job_data["model_id"],
-        "dataset_id": job_data["dataset_id"],
-        "method": job_data["method"],
-        "epochs": job_data["epochs"],
-        "learning_rate": job_data["learning_rate"],
-        "batch_size": job_data["batch_size"],
+def job_to_dict(record):
+    return {
+        "id": record.id,
+        "model_id": record.model_id,
+        "dataset_id": record.dataset_id,
+        "method": record.method,
+        "epochs": record.epochs,
+        "learning_rate": record.learning_rate,
+        "batch_size": record.batch_size,
         "max_steps": FORGEML_MAX_STEPS,
-        "description": job_data.get("description"),
-
-        "status": "queued",
-        "progress": 0,
-        "current_stage": "queued",
-
-        "error": None,
-
-        "created_at": datetime.utcnow().isoformat(),
-        "started_at": None,
-        "completed_at": None,
-
-        "metrics": None,
-        "artifact_path": None,
+        "description": record.description,
+        "status": record.status,
+        "progress": record.progress,
+        "current_stage": record.current_stage,
+        "error": record.error,
+        "created_at": record.created_at,
+        "started_at": record.started_at,
+        "completed_at": record.completed_at,
+        "metrics": record.metrics,
+        "artifact_path": record.artifact_path,
+        "artifact_id": record.artifact_id,
     }
 
-    training_jobs[job_id] = job
+
+def update_job(job_id: str, **updates):
+    db = SessionLocal()
+    try:
+        record = db.get(TrainingJobRecord, job_id)
+        if record is None:
+            return
+
+        for key, value in updates.items():
+            if hasattr(record, key):
+                setattr(record, key, value)
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def create_training_job(job_data: dict):
+    job_id = str(uuid4())
+    now = datetime.utcnow().isoformat()
+
+    db = SessionLocal()
+    try:
+        record = TrainingJobRecord(
+            id=job_id,
+            model_id=job_data["model_id"],
+            dataset_id=job_data["dataset_id"],
+            method=job_data["method"],
+            epochs=job_data["epochs"],
+            learning_rate=job_data["learning_rate"],
+            batch_size=job_data["batch_size"],
+            description=job_data.get("description"),
+            status="queued",
+            progress=0,
+            current_stage="queued",
+            created_at=now,
+        )
+        db.add(record)
+        db.commit()
+        job = job_to_dict(record)
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
     thread = Thread(
         target=execute_training_job,
         args=(job_id,),
         daemon=True,
     )
-
     thread.start()
 
     return job
-
 
 # -------------------------------------------------------------------
 # Main training execution pipeline
@@ -158,14 +192,18 @@ def create_training_job(job_data: dict):
 
 def execute_training_job(job_id: str):
 
-    job = training_jobs.get(job_id)
-
-    if job is None:
-        return
+    db = SessionLocal()
+    try:
+        record = db.get(TrainingJobRecord, job_id)
+        if record is None:
+            return
+        job = job_to_dict(record)
+    finally:
+        db.close()
 
     try:
 
-        job["started_at"] = datetime.utcnow().isoformat()
+        update_job(job_id, started_at=datetime.utcnow().isoformat())
 
         # -------------------------------------------------------------
         # Stage 1: Validate
@@ -178,19 +216,24 @@ def execute_training_job(job_id: str):
             current_stage="validating",
         )
 
-        model_record = models.get(job["model_id"])
+        db = SessionLocal()
+        try:
+            model_record = db.get(ModelRecord, job["model_id"])
 
-        if model_record is None:
-            raise ValueError(
-                f"Model not found: {job['model_id']}"
-            )
+            if model_record is None:
+                raise ValueError(
+                    f"Model not found: {job['model_id']}"
+                )
+
+            model_name = model_record.model_id
+        finally:
+            db.close()
 
         if job["method"].lower() != "lora":
             raise ValueError(
                 "V1.1 currently supports only LoRA training."
             )
 
-        model_name = model_record["model_id"]
 
         # -------------------------------------------------------------
         # Stage 2: Resolve dataset
@@ -423,6 +466,20 @@ def execute_training_job(job_id: str):
             str(job_output_dir)
         )
 
+        # -------------------------------------------------------------
+        # Stage 10: Metrics
+        # -------------------------------------------------------------
+
+        metrics = dict(train_result.metrics)
+
+        metrics["training_examples"] = len(dataset)
+        metrics["epochs"] = job["epochs"]
+        metrics["batch_size"] = job["batch_size"]
+        metrics["learning_rate"] = job["learning_rate"]
+        metrics["method"] = job["method"]
+        metrics["max_steps"] = job["max_steps"]
+
+        # Create the artifact only after metrics have been populated.
         artifact = create_artifact(
             training_job_id=job_id,
             model_id=job["model_id"],
@@ -431,19 +488,6 @@ def execute_training_job(job_id: str):
             artifact_path=str(job_output_dir),
             metrics=metrics,
         )
-
-        # -------------------------------------------------------------
-        # Stage 10: Metrics
-        # -------------------------------------------------------------
-
-        metrics = train_result.metrics
-
-        metrics["training_examples"] = len(dataset)
-        metrics["epochs"] = job["epochs"]
-        metrics["batch_size"] = job["batch_size"]
-        metrics["learning_rate"] = job["learning_rate"]
-        metrics["method"] = job["method"]
-        metrics["max_steps"] = job["max_steps"]
 
         # -------------------------------------------------------------
         # Completed
@@ -480,46 +524,40 @@ def execute_training_job(job_id: str):
         )
 
 
-# -------------------------------------------------------------------
-# Update job
-# -------------------------------------------------------------------
-
-def update_job(job_id: str, **updates):
-
-    if job_id not in training_jobs:
-        return
-
-    training_jobs[job_id].update(updates)
-
-
-# -------------------------------------------------------------------
-# Get single job
-# -------------------------------------------------------------------
-
 def get_training_job(job_id: str):
+    db = SessionLocal()
+    try:
+        record = db.get(TrainingJobRecord, job_id)
+        return job_to_dict(record) if record else None
+    finally:
+        db.close()
 
-    return training_jobs.get(job_id)
-
-
-# -------------------------------------------------------------------
-# Get all jobs
-# -------------------------------------------------------------------
 
 def get_training_jobs():
+    db = SessionLocal()
+    try:
+        records = (
+            db.query(TrainingJobRecord)
+            .order_by(TrainingJobRecord.created_at.desc())
+            .all()
+        )
+        return [job_to_dict(record) for record in records]
+    finally:
+        db.close()
 
-    return list(training_jobs.values())
-
-
-# -------------------------------------------------------------------
-# Delete job
-# -------------------------------------------------------------------
 
 def delete_training_job(job_id: str):
+    db = SessionLocal()
+    try:
+        record = db.get(TrainingJobRecord, job_id)
+        if record is None:
+            return False
 
-    if job_id in training_jobs:
-
-        del training_jobs[job_id]
-
+        db.delete(record)
+        db.commit()
         return True
-
-    return False
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
