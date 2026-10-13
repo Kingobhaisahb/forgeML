@@ -17,7 +17,11 @@ from transformers import (
 
 from app.services.artifact_service import create_artifact
 from app.database import SessionLocal
-from app.database_models import ModelRecord, TrainingJobRecord
+from app.database_models import (
+    ModelRecord,
+    DatasetRecord,
+    TrainingJobRecord,
+)
 
 
 # -------------------------------------------------------------------
@@ -177,6 +181,21 @@ def create_training_job(job_data: dict):
     finally:
         db.close()
 
+    
+    if os.getenv("FORGEML_DRY_RUN", "0") == "1":
+        update_job(
+            job_id,
+            status="dry_run",
+            progress=100,
+            current_stage="dry_run_complete",
+            metrics={
+                "dry_run": True,
+                "message": "Job creation verified. Training was not started.",
+            },
+            completed_at=datetime.utcnow().isoformat(),
+        )
+        return get_training_job(job_id)
+
     thread = Thread(
         target=execute_training_job,
         args=(job_id,),
@@ -185,6 +204,7 @@ def create_training_job(job_data: dict):
     thread.start()
 
     return job
+
 
 # -------------------------------------------------------------------
 # Main training execution pipeline
@@ -245,7 +265,34 @@ def execute_training_job(job_id: str):
             current_stage="loading_dataset",
         )
 
-        dataset_path = DATA_DIR / "local_train.jsonl"
+        
+        db = SessionLocal()
+        try:
+            dataset_record = db.get(DatasetRecord, job["dataset_id"])
+
+            if dataset_record is None:
+                raise ValueError(
+                    f"Dataset not found: {job['dataset_id']}"
+                )
+
+            configured_path = dataset_record.file_path
+        finally:
+            db.close()
+
+        if configured_path:
+            dataset_path = Path(configured_path)
+
+            if not dataset_path.is_absolute():
+                dataset_path = BACKEND_DIR / dataset_path
+        else:
+            # Compatibility fallback for existing datasets without a file path.
+            dataset_path = DATA_DIR / "local_train.jsonl"
+
+        if not dataset_path.exists():
+            raise FileNotFoundError(
+                f"Training dataset file not found: {dataset_path}"
+            )
+
 
         if not dataset_path.exists():
             raise FileNotFoundError(

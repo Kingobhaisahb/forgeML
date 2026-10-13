@@ -1,9 +1,7 @@
-
 from datetime import datetime
 
-from sqlalchemy import Column, String, Integer, Float, JSON
+from sqlalchemy import Column, String, Integer, Float, JSON, Text
 from app.database import Base
-
 
 def timestamp():
     return datetime.utcnow().isoformat()
@@ -86,3 +84,18 @@ class EvaluationRecord(Base):
     started_at = Column(String, nullable=True)
     completed_at = Column(String, nullable=True)
     metrics = Column(JSON, nullable=True)
+
+
+class InferenceRecord(Base):
+    __tablename__ = "inference_history"
+
+    id = Column(String, primary_key=True, index=True)
+    artifact_id = Column(String, nullable=False, index=True)
+    prompt = Column(Text, nullable=False)
+    response = Column(Text, nullable=False)
+    max_new_tokens = Column(Integer, nullable=False)
+    temperature = Column(Float, nullable=False)
+    generation_time_seconds = Column(Float, nullable=False)
+    prompt_tokens = Column(Integer, nullable=False)
+    generated_tokens = Column(Integer, nullable=False)
+    created_at = Column(String, default=timestamp, nullable=False)
