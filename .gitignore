@@ -28,3 +28,20 @@ frontend/out/
 # Logs and temporary files
 *.log
 .DS_Store
+
+# Python cache and test artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Training and experiment artifacts
+backend/checkpoints/
+backend/runs/
+wandb/
+
+# IDE and OS files
+.vscode/
+.idea/
+Thumbs.db

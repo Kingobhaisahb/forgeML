@@ -9,6 +9,8 @@ from app.services.training_service import (
     delete_training_job,
 )
 
+from typing import Optional, Literal
+
 
 router = APIRouter(
     prefix="/api/training-jobs",
@@ -24,6 +26,7 @@ class TrainingJobCreate(BaseModel):
     learning_rate: float
     batch_size: int
     description: Optional[str] = None
+    compute_target: Literal["local", "amd_mi300x"] = "local"
 
 
 class TrainingJobResponse(BaseModel):
@@ -47,6 +50,9 @@ class TrainingJobResponse(BaseModel):
 
     metrics: Optional[dict] = None
     artifact_path: Optional[str] = None
+
+    compute_target: str = "local"
+    artifact_id: Optional[str] = None
 
 
 @router.post(

@@ -1,7 +1,10 @@
+
 from datetime import datetime
 
 from sqlalchemy import Column, String, Integer, Float, JSON, Text
+
 from app.database import Base
+
 
 def timestamp():
     return datetime.utcnow().isoformat()
@@ -98,4 +101,32 @@ class InferenceRecord(Base):
     generation_time_seconds = Column(Float, nullable=False)
     prompt_tokens = Column(Integer, nullable=False)
     generated_tokens = Column(Integer, nullable=False)
+    created_at = Column(String, default=timestamp, nullable=False)
+
+
+class ExperimentRecord(Base):
+    __tablename__ = "experiments"
+
+    id = Column(String, primary_key=True, index=True)
+    artifact_id = Column(String, nullable=False, index=True)
+
+    prompt = Column(Text, nullable=False)
+    max_new_tokens = Column(Integer, nullable=False)
+    temperature = Column(Float, nullable=False)
+
+    base_model_name = Column(String, nullable=False)
+    fine_tuned_model_name = Column(String, nullable=False)
+
+    base_response = Column(Text, nullable=False)
+    fine_tuned_response = Column(Text, nullable=False)
+
+    base_generation_time_seconds = Column(Float, nullable=False)
+    fine_tuned_generation_time_seconds = Column(Float, nullable=False)
+
+    base_prompt_tokens = Column(Integer, nullable=False)
+    fine_tuned_prompt_tokens = Column(Integer, nullable=False)
+
+    base_generated_tokens = Column(Integer, nullable=False)
+    fine_tuned_generated_tokens = Column(Integer, nullable=False)
+
     created_at = Column(String, default=timestamp, nullable=False)
